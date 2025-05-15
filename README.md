@@ -6,17 +6,11 @@ This is the Github for ATAC2GRN, a validated pipeline for running chromatin prof
 
 If you're looking to take bits and pieces of this code for your own use, skip forward to that folder's discussion. Otherwise, here are two options to set up your machine with the appropriate prerequisites.
 
-### Singularity File
+### Apptainer File
 
-Attached is the file
+Now with a new Apptainer image and definition file for immediate rollout on your high-performance computing cluster of choice! Download the new .sif file [here](https://drive.google.com/file/d/1UCvvgN3Bs85otx_AXmIazv1GznzPgU4C/view?usp=sharing).
 
-```
-ATAC2GRN_Singularity
-```
-
-This is a file that specifies commands in an order to a program that will build a Linux system (Ubuntu 16.04, specifically). If you're comfortable using Singularity, create a container with this file on a system using the Ubuntu 16.04 OS (approximate size ~35GB). If you'd like to learn how to build a Singularity container using this file, a quick tutorial can be found [here](https://singularity.lbl.gov/quickstart).
-
-We'd like to thank the NIH HPC for the inspiration they provided with these Singularity files.
+For more information on how to use Apptainer in your system, visit [here](https://apptainer.org/docs/user/latest/quick_start.html).
 
 ### Using VirtualBox and a VDI File
 
@@ -42,7 +36,7 @@ This code holds unit-tested code for figure generation in the original paper.
 
 This folder contains all the pipeline code used in the paper, including the bash code used to test all 4560 pipelines as well as the Snakemake alternative for final pipelines. Interested users are provided with both, to use depending on their personal preference.
 
-To make best use of these tools, please open the Pipes folder and follow the README.md instructions on how to use these finalized pipelines.
+To make best use of these tools, please open the Pipes folder and follow the README.md instructions on how to use these finalized pipelines. 
 
 ### ROCtool
 
