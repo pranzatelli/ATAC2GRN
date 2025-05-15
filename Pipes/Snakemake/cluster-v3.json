@@ -1,0 +1,65 @@
+    {
+         "__default__" :
+         {
+             "mem"       : "120g",
+             "partition" : "norm",
+             "time"      : "24:00:00",
+             "cpus"      : "32",
+         },
+        "perform_bowtie" :
+         {
+             "mem"       : "120g",
+             "partition" : "norm",
+             "time"      : "8:00:00",
+             "cpus"      : "32",
+         },
+        "perform_picard_sort" :
+         {
+             "mem"       : "120g",
+             "partition" : "norm",
+             "time"      : "24:00:00",
+             "cpus"      : "32",
+         },
+        "perform_picard_markduplicates" :
+         {
+             "mem"       : "1000g",
+             "partition" : "largemem",
+             "time"      : "24:00:00",
+             "cpus"      : "64",
+         },
+        "perform_makeTagDirectory" :
+         {
+             "mem"       : "10g",
+             "partition" : "quick",
+             "time"      : "4:00:00",
+             "cpus"      : "4",
+         },
+        "perform_grepcutPeaks" :
+         {
+             "mem"       : "10g",
+             "partition" : "quick",
+             "time"      : "1:00:00",
+             "cpus"      : "4",
+         },
+        "perform_bedtoolsMergePeaks" :
+         {
+             "mem"       : "10g",
+             "partition" : "quick",
+             "time"      : "1:00:00",
+             "cpus"      : "4",
+         },
+        "perform_footprinting" :
+         {
+             "mem"       : "120g",
+             "partition" : "norm",
+             "time"      : "12:00:00",
+             "cpus"      : "32",
+         },
+        "perform_bedmap" :
+         {
+             "mem"       : "80g",
+             "partition" : "norm",
+             "time"      : "8:00:00",
+             "cpus"      : "4",
+         }
+    }

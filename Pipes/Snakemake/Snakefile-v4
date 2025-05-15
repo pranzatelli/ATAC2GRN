@@ -1,0 +1,165 @@
+from os.path import basename
+from glob import glob
+
+PROJECTS = [basename(folder) for folder in glob('[Input Path]/*')]
+
+rule all:
+	input:
+		footprints = expand('Output/{project}/{project}-footprints/',project=PROJECTS),
+		bedgraphs = expand('Output/{project}/{project}-peaks.bg',project=PROJECTS),
+		fmaps = expand("Output/{project}/{project}-bedmap.bed",project=PROJECTS),
+		pmaps = expand('Output/{project}/{project}-association_matrix_p.bed',project=PROJECTS)
+
+rule perform_bowtie:
+	output:
+		temp('Output/{project}/{project}-step1done.txt')
+	params:
+		proj = '[Input Path]/{project}/',
+		header = 'Output/{project}/{project}-bowtie2'
+	shell:
+		"module load bowtie; declare -i count=1;"
+		"for file in {params.proj}*_R1*.f*q.gz;"
+		'do file2="${{file//_R1/_R2}}";'
+		"bowtie2 -x CHM13/Bowtie2Index/chm13 -p 32 -q -t "
+		"--very-sensitive -1 $file -2 $file2 -S {params.header}-$count.sam;"
+		"count=$count+1; done; touch {output};"
+
+rule perform_picard_sort:
+	input:
+		'Output/{project}/{project}-step1done.txt'
+	output:
+		temp('Output/{project}/{project}-view.sam')
+	params:
+		sample = '{project}',
+		header = 'Output/{project}/{project}-bowtie2',
+		samfile1 = 'Output/{project}/{project}-merged.sam',
+		samfile2 = 'Output/{project}/{project}-grouped.sam'
+	shell:
+		"module load picard;"
+		"arr=({params.header}*);"
+		"if [ ${{#arr[@]}} -gt 1 ];"
+		"then java -Xmx120g -XX:ParallelGCThreads=31 -jar $PICARDJARPATH/picard.jar "
+		"MergeSamFiles I=${{arr[0]}} I=${{arr[1]}} OUTPUT={params.samfile1};"
+		"echo 'First two files merged.';"
+		"if [ ${{#arr[@]}} -gt 2 ]; then add_sams=${{arr[@]:2:9999}};"
+		"for file in $add_sams;"
+		"do java -Xmx120g -XX:ParallelGCThreads=31 -jar $PICARDJARPATH/picard.jar "
+		"MergeSamFiles I={params.samfile1} I=$file OUTPUT={params.header}MERGE.sam;"
+		"mv {params.header}MERGE.sam {params.samfile1}; echo 'Additional file merged.';"
+		"done;fi;"
+		"elif [ ${{#arr[@]}} -eq 1 ]; then mv ${{arr[0]}} {params.samfile1};"
+		"touch ${{arr[0]}}; echo 'Only one samfile found.';"
+		"else echo 'Zero samfiles found.'; exit 1;"
+		"fi;"
+		"java -Xmx120g -XX:ParallelGCThreads=31 -jar $PICARDJARPATH/picard.jar "
+		"SortSam INPUT={params.samfile1} OUTPUT={params.samfile2} "
+		"SORT_ORDER=coordinate;"
+		"java -Xmx120g -XX:ParallelGCThreads=31 -jar $PICARDJARPATH/picard.jar "
+		"AddOrReplaceReadGroups INPUT={params.samfile2} OUTPUT={output} "
+		"RGLB=lib1 RGPL=ILLUMINA RGPU=unit1 RGSM={params.sample};"
+		"rm {params.header}*.sam {params.samfile1} {params.samfile2};"
+
+rule perform_picard_markduplicates:
+	input:
+		'Output/{project}/{project}-view.sam'
+	params:
+		intermediate = 'Output/{project}/{project}-picard.sam'
+	output:
+		'Output/{project}/{project}-picard.bam',
+	shell:
+		"module load picard;"
+		"> {params.intermediate};> {output};"
+		"java -Xmx240g -XX:ParallelGCThreads=55 -jar $PICARDJARPATH/picard.jar "
+		"MarkDuplicates INPUT={input} OUTPUT={params.intermediate} "
+		"METRICS_FILE=marked_metrics.txt REMOVE_DUPLICATES=true;"
+		"java -Xmx240g -XX:ParallelGCThreads=55 -jar $PICARDJARPATH/picard.jar "
+		"SamFormatConverter INPUT={params.intermediate} OUTPUT={output}"
+		" CREATE_INDEX=true;"
+		"rm {params.intermediate};"
+
+rule perform_makeTagDirectory:
+	input:
+		'Output/{project}/{project}-picard.bam'
+	output:
+		directory = directory('Output/{project}/{project}-tagDirectory'),
+		peaks = temp('Output/{project}/{project}-peaks.bed')
+	shell:
+		"module load homer;"
+		"makeTagDirectory {output.directory} {input};"
+		"findPeaks {output.directory} -region -size 500 -minDist 50 -o auto -tbp 0;"
+		"pos2bed.pl {output.directory}/peaks.txt > {output.peaks};"
+
+rule perform_grepcutPeaks:
+	input:
+		'Output/{project}/{project}-tagDirectory'
+	params:
+		intermediate = 'Output/{project}/{project}-tagDirectory/peaks2.txt'
+	output:
+		'Output/{project}/{project}-peaks.bg'
+	shell:
+		"grep -v '#' {input}/peaks.txt > {params.intermediate};"
+		"cut -f2-4,8 {params.intermediate} > {output};"
+		"rm {params.intermediate};"		
+
+rule perform_bedtoolsMergePeaks:
+	input:
+		'Output/{project}/{project}-peaks.bed'
+	params:
+		intermediate = "Output/{project}/{project}-peaks.sorted.bed"
+	output:
+		'Output/{project}/{project}-peaks.merged.bed'
+	shell:
+		"module load bedtools;"
+		"bedtools sort -i {input} > {params.intermediate};"
+		"bedtools merge -i {params.intermediate} > {output};"
+		"rm {params.intermediate};"
+
+rule perform_footprinting:
+	input:
+		directory = 'Output/{project}/{project}-tagDirectory',
+		bamfile = 'Output/{project}/{project}-picard.bam',
+		peaks = 'Output/{project}/{project}-peaks.merged.bed',
+	params:
+		home = 'Output/{project}'
+	output:
+		directory('Output/{project}/{project}-footprints/')
+	shell:
+		"set +euo pipefail;"
+		"module load rgt/0.12.1;"
+		"if [[ ! -d {output} ]]; then mkdir {output}; fi;"
+		"rgt-hint footprinting --atac-seq --paired-end --output-location {output} "
+		"--organism chm13 {input.bamfile} {input.peaks};"
+		"rm -r {input.directory};"
+		"wc -l *;"
+		"exit 0;"
+
+rule perform_fmap:
+	input:
+		'Output/{project}/{project}-footprints'
+	params:
+		temp = "Output/{project}/{project}-HINT.bed",
+		tempsort = "Output/{project}/{project}-sorted_HINT.bed"
+	output:
+		"Output/{project}/{project}-bedmap.bed"
+	shell:
+		"module load bedops/2.4.35;"
+		"cp {input}/*.bed {params.temp};"
+		"sort -k 1,1 -k2,2n {params.temp} > {params.tempsort};"
+		"bedmap --ec --multidelim '&' --skip-unmapped --sweep-all --bp-ovr 3 --echo --echo-map {params.tempsort} hg19/v3_fimo.bed > {output};"
+		"rm {params.temp} {params.tempsort}"
+
+rule perform_pmap:
+	input:
+		'Output/{project}/{project}-footprints'
+	params:
+		temp = 'Output/{project}/{project}-HINT.bed',
+		tempsort = 'Output/{project}/{project}-sorted_HINT.bed'
+	output:
+		'Output/{project}/{project}-association_matrix_p.bed'
+	shell:
+		"module load bedops/2.4.35;"
+		"cp {input}/*.bed {params.temp};"
+		"sort -k 1,1 -k2,2n {params.temp} > {params.tempsort};"
+		"bedmap --ec --multidelim '&' --skip-unmapped --sweep-all --echo --echo-map hg19/tss.ucsc_canonical_clean.tssified.txt {params.tempsort} > {output};"
+		"rm {params.temp} {params.tempsort}"
+

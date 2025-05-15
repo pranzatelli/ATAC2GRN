@@ -1,0 +1,20 @@
+# Here you can overwrite any property set in the data.config file. It shall not be
+# be overwritten in any case, so if you are experiencing problems rename or remove this
+# file. See data.config for how the file should be formatted.
+
+# Template to add a genomic section.
+#[self_defined]
+#genome: undefined
+#chromosome_sizes: undefined
+#gene_regions: undefined
+#annotation: undefined
+#gene_alias: undefined
+
+[chm13]
+genome: chm13/chm13v2.0.fa
+chromosome_sizes: chm13/hs1.chrom.sizes
+genes_RefSeq: chm13/genes_RefSeq_chm13.bed
+genes_Gencode: chm13/genes_Gencode_chm13.bed 
+annotation: chm13/GCF_009914755.1_T2T-CHM13v2.0_genomic.gtf
+gene_alias: chm13/alias_chm13.txt
+
