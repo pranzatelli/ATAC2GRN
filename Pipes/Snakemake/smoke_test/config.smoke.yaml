@@ -1,0 +1,20 @@
+# Smoke-test config for the tiny synthetic fixture in this folder.
+# Run from inside the container (see Pipes/README.md "Smoke test"):
+#
+#   cd Pipes/Snakemake/smoke_test
+#   bowtie2-build toy_genome.fa toy_genome
+#   cd ..
+#   snakemake -s Snakefile --configfile smoke_test/config.smoke.yaml -n   # dry run
+#   snakemake -s Snakefile --configfile smoke_test/config.smoke.yaml --cores 2
+
+input_dir: "smoke_test/data"
+output_dir: "smoke_test/Output"
+mode: "PE"
+genome_build: "toy"
+bowtie2_index: "smoke_test/toy_genome"
+peak_size: 50
+peak_min_dist: 50
+mark_duplicates: true
+fimo_bed: ""
+tss_bed: ""
+threads: 2
