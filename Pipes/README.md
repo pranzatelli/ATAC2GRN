@@ -20,21 +20,11 @@ built from `../atac2grn.def` at the repo root:
 # Build locally (from the repo root):
 apptainer build atac2grn.sif atac2grn.def
 
-# ...or pull the prebuilt image (see caveat below):
+# ...or pull the prebuilt image:
 # https://drive.google.com/file/d/1UCvvgN3Bs85otx_AXmIazv1GznzPgU4C/view?usp=sharing
 
 apptainer shell atac2grn.sif
 ```
-
-> **Hosting caveat:** the prebuilt `.sif`/`.vdi` images are currently only
-> hosted on Google Drive, which has no versioning, no immutable/checksummed
-> releases, and no guarantee of long-term availability. We recommend (but
-> have not yet migrated to, see "Recommended hosting" below): publishing the
-> `.sif` to the GitHub Container Registry (GHCR) as a versioned OCI image
-> alongside tagged releases of this repo, and archiving the `.vdi` (and a
-> copy of the `.sif`) on Zenodo for a citable DOI. Building locally from
-> `atac2grn.def` with `apptainer build` avoids this dependency entirely and
-> is the most reproducible option today.
 
 ### 2. Edit `config.yaml`
 
@@ -139,18 +129,4 @@ original paper's NIH HPC cluster runs. They are not runnable outside that
 cluster (they use Lmod `module load` commands and Slurm `--cluster`
 scheduling). See `Snakemake/legacy/README.md` for details. All new work
 should use `Snakemake/Snakefile` + `Snakemake/config.yaml` instead.
-
-## Recommended hosting (not yet migrated)
-
-The prebuilt `.sif`/`.vdi` images currently live only on Google Drive, which
-lacks versioning, checksums, and durability guarantees appropriate for a
-scientific artifact tied to a published paper. Migrating hosting is out of
-scope for this change, but the recommendation is:
-
-| Artifact | Recommended home | Why |
-|----------|------------------|-----|
-| `.sif` (container) | [GitHub Container Registry (GHCR)](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry) | Free, versioned/tagged, integrates with `Bootstrap: docker` in `atac2grn.def`, pullable directly with `apptainer pull docker://ghcr.io/...`. No practical size limit for typical container sizes. |
-| `.vdi` (VM disk image) | [Zenodo](https://zenodo.org/) | Designed for large scientific artifacts, gives a citable DOI, has no hard size cap suitable for multi-GB VM images (GitHub Releases caps individual files at 2 GB). |
-| `.sif` (secondary mirror) | GitHub Releases | Only if the built `.sif` is under GitHub's 2 GB per-file limit; convenient for users who don't want a registry pull, but should not be the only copy since Releases aren't ideal for frequently-updated large binaries. |
-| Either, as a fallback | Institutional storage (e.g. an NIH-affiliated file server) | Useful if long-term grant-funded hosting is available, but not independently verified here and has no public discoverability unless linked from this README. |
 
