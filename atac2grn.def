@@ -64,9 +64,13 @@ From: python:3.9
 	# --- Python deps for RGT/HINT (RGT itself is installed --no-deps below, so every
 	#     one of its runtime requirements, from reg-gen's requirements.txt, is listed
 	#     explicitly and pinned where the upstream project pins them) ---
+	# hmmlearn is pinned because HMMtool.py (see ../HMMtool/) subclasses
+	# hmmlearn's private _BaseHMM API (_init, _compute_log_likelihood, etc.),
+	# whose signatures are not stable across hmmlearn releases -- 0.3.3 is
+	# the version HMMtool.py's overrides were verified against.
 	pip install --no-cache-dir \
 		cython numpy scipy scikit-learn pandas matplotlib natsort \
-		pysam pyBigWig biopython fisher moods-python hmmlearn \
+		pysam pyBigWig biopython fisher moods-python hmmlearn==0.3.3 \
 		HTSeq configparser logomaker joblib
 	pip install --no-cache-dir --no-deps RGT==1.0.2
 
