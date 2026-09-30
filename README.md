@@ -8,21 +8,13 @@ If you're looking to take bits and pieces of this code for your own use, skip fo
 
 ### Apptainer File
 
-Now with a new Apptainer image and definition file for immediate rollout on your high-performance computing cluster of choice! Download the new .sif file [here](https://drive.google.com/file/d/1UCvvgN3Bs85otx_AXmIazv1GznzPgU4C/view?usp=sharing), or build it yourself from `atac2grn.def` (recommended -- see caveat below):
+Now with a new Apptainer image and definition file for immediate rollout on your high-performance computing cluster of choice! Download the new .sif file [here](https://drive.google.com/file/d/1UCvvgN3Bs85otx_AXmIazv1GznzPgU4C/view?usp=sharing), or build it yourself from `atac2grn.def`:
 
 ```
 apptainer build atac2grn.sif atac2grn.def
 ```
 
 For more information on how to use Apptainer in your system, visit [here](https://apptainer.org/docs/user/latest/quick_start.html).
-
-> **Note:** the `.sif`/`.vdi` links above currently point to Google Drive,
-> which has no versioning, checksums, or durability guarantees. We recommend
-> moving these to the GitHub Container Registry (for the `.sif`) and Zenodo
-> (for the `.vdi`, as a citable DOI) -- see `Pipes/README.md` ("Recommended
-> hosting") for the full rationale. That migration has not been done yet;
-> building `atac2grn.sif` yourself from `atac2grn.def` avoids depending on
-> these links at all.
 
 ### Using VirtualBox and a VDI File
 
