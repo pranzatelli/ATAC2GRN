@@ -1,0 +1,64 @@
+# ATAC2GRN pipeline configuration
+#
+# Copy this file, edit the values below for your run, and invoke Snakemake with
+# `snakemake --configfile your_config.yaml`. See Pipes/README.md for a full
+# Quickstart walkthrough.
+
+# --- Input / output layout -------------------------------------------------
+# input_dir must contain one subfolder per sample/project. Each subfolder is
+# globbed for FASTQ files:
+#   PE mode: *_R1*.f*q.gz and *_R2*.f*q.gz (any number of lanes per project;
+#            all lanes are aligned separately and merged)
+#   SE mode: *.f*q.gz (any number of files; all are aligned separately and
+#            merged)
+input_dir: "data"
+output_dir: "Output"
+
+# --- Sequencing mode ---------------------------------------------------------
+# "PE" (paired-end) or "SE" (single-end).
+mode: "PE"
+
+# --- Reference genome ---------------------------------------------------------
+# genome_build is a free-form label used for logging and is also passed as
+# --organism to rgt-hint. rgt-hint only ships built-in genome data for hg19,
+# hg38, mm9, mm10 (and a few others; see reg-gen's data/ directory). Any other
+# build (including chm13/T2T) requires you to manually register a custom
+# organism with RGT first -- see Pipes/README.md ("Using a genome RGT doesn't
+# know about") and Pipes/Snakemake/data.config.user before footprinting will
+# work.
+genome_build: "hg19"
+
+# Prefix passed to `bowtie2 -x` (i.e. the path/prefix of a prebuilt Bowtie2
+# index, NOT a FASTA file).
+bowtie2_index: "genomes/hg19/Bowtie2Index/genome"
+
+# --- HOMER peak calling -------------------------------------------------------
+# findPeaks -size. 50 is the default used here because it is the value from
+# the original published hg19/mm9 pipeline (Snakefile-v2-*) that produced the
+# paper's validated results. The v4/chm13 Snakefile used 500 instead, but that
+# variant was never validated against ChIP-seq the way the hg19/mm9 runs were,
+# so 500 is presented only as a data point, not a recommendation.
+peak_size: 50
+peak_min_dist: 50
+
+# --- Duplicate marking -------------------------------------------------------
+# true:  merge/sort/mark-and-remove PCR duplicates with Picard before peak
+#        calling (matches the v4/chm13 Snakefile).
+# false: skip duplicate marking entirely, going straight from samtools
+#        sort+index to HOMER (matches the original v2 hg19/mm9 Snakefiles,
+#        which never deduplicated reads).
+mark_duplicates: true
+
+# --- Optional downstream association-matrix steps (bedops bedmap) -----------
+# Leave both blank ("") to skip the perform_fmap/perform_pmap rules entirely.
+# These intersect footprints against a FIMO motif BED and a TSS BED
+# respectively. NOTE: in the original v4/chm13 Snakefile these were always
+# hg19 annotation files even though reads were aligned to chm13 -- if you
+# reuse that combination you are implicitly assuming a chm13->hg19 coordinate
+# mapping (e.g. via liftover) was already applied to your footprints; this
+# pipeline does not perform that liftover for you.
+fimo_bed: ""
+tss_bed: ""
+
+# --- Resources ---------------------------------------------------------------
+threads: 8
