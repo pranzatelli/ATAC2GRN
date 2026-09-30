@@ -5,32 +5,79 @@ From: python:3.9
 	MAINTAINER Thomas JF Pranzatelli
 
 %post
-	apt-get update
-	apt-get install -y default-jdk perl zip cmake
-	apt-get clean
+	# All tool versions below are pinned so the image is reproducible. Every
+	# binary this pipeline invokes is installed to a fixed, absolute location
+	# and exposed on PATH below (see %environment) instead of relying on an
+	# HPC Lmod "module load" system, which is not available inside a container.
+	set -e
 
-	wget https://sourceforge.net/projects/bowtie-bio/files/bowtie2/2.5.4/bowtie2-2.5.4-source.zip
-	unzip bowtie2-2.5.4-source.zip
+	apt-get update
+	apt-get install -y --no-install-recommends \
+		default-jdk perl zip cmake build-essential autoconf pkg-config \
+		git wget unzip ca-certificates \
+		zlib1g-dev libbz2-dev liblzma-dev libcurl4-openssl-dev libssl-dev \
+		bedtools
+	apt-get clean
+	rm -rf /var/lib/apt/lists/*
+
+	# --- bowtie2 2.5.4 (built from source, installed to /opt/bowtie2) ---
+	cd /opt
+	wget -q https://sourceforge.net/projects/bowtie-bio/files/bowtie2/2.5.4/bowtie2-2.5.4-source.zip
+	unzip -q bowtie2-2.5.4-source.zip
+	rm bowtie2-2.5.4-source.zip
 	cd bowtie2-2.5.4
-	make
+	make -j"$(nproc)"
 	make static-libs && make STATIC_BUILD=1
 	make sra-deps && make USE_SRA=1
-	cd ..
+	cd /opt
 
-	wget https://github.com/broadinstitute/picard/releases/download/3.4.0/picard.jar
+	# --- picard 3.4.0 (jar only; invoked as: java -jar $PICARDJARPATH/picard.jar) ---
+	mkdir -p /opt/picard
+	wget -q -O /opt/picard/picard.jar \
+		https://github.com/broadinstitute/picard/releases/download/3.4.0/picard.jar
 
-	wget https://github.com/samtools/samtools/releases/download/1.21/samtools-1.21.tar.bz2
+	# --- samtools 1.21 (installed to /usr/local via make install) ---
+	cd /opt
+	wget -q https://github.com/samtools/samtools/releases/download/1.21/samtools-1.21.tar.bz2
 	tar -xf samtools-1.21.tar.bz2
+	rm samtools-1.21.tar.bz2
 	cd samtools-1.21
 	./configure --without-curses
-	make
+	make -j"$(nproc)"
 	make install
-	cd ..
+	cd /opt
 
-	mkdir homer && cd homer
-	wget http://homer.ucsd.edu/homer/configureHomer.pl
+	# --- bedops 2.4.42 (prebuilt static binaries; apt has no bedops package) ---
+	mkdir -p /opt/bedops
+	wget -q -O /opt/bedops.tar.bz2 \
+		https://github.com/bedops/bedops/releases/download/v2.4.42/bedops_linux_x86_64-v2.4.42.tar.bz2
+	tar -xjf /opt/bedops.tar.bz2 -C /opt/bedops
+	rm /opt/bedops.tar.bz2
+
+	# --- HOMER (installed to /opt/homer; makeTagDirectory/findPeaks/pos2bed.pl live in bin/) ---
+	mkdir -p /opt/homer
+	cd /opt/homer
+	wget -q http://homer.ucsd.edu/homer/configureHomer.pl
 	perl configureHomer.pl -install
-	cd ..
+	cd /opt
 
-	pip install cython pysam pyBigWig biopython fisher moods-python hmmlearn
-	pip install --no-deps RGT
+	# --- Python deps for RGT/HINT (RGT itself is installed --no-deps below, so every
+	#     one of its runtime requirements, from reg-gen's requirements.txt, is listed
+	#     explicitly and pinned where the upstream project pins them) ---
+	pip install --no-cache-dir \
+		cython numpy scipy scikit-learn pandas matplotlib natsort \
+		pysam pyBigWig biopython fisher moods-python hmmlearn \
+		HTSeq configparser logomaker joblib
+	pip install --no-cache-dir --no-deps RGT==1.0.2
+
+	# --- Snakemake, to run the pipeline itself inside the container ---
+	pip install --no-cache-dir "snakemake>=7,<8"
+
+%environment
+	export PATH=/opt/bowtie2-2.5.4:/opt/homer/bin:/opt/bedops/bin:$PATH
+	export PICARDJARPATH=/opt/picard
+	# RGT stores per-organism genome data (fasta, chrom sizes, gene models) here.
+	# Registering a new organism (e.g. chm13, which is NOT built into RGT) means
+	# placing/merging a data.config.user file at $RGTDATA/data.config.user — see
+	# Pipes/README.md and Pipes/Snakemake/data.config.user for details.
+	export RGTDATA=/root/rgtdata
