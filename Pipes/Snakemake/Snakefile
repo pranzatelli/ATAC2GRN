@@ -1,0 +1,353 @@
+# ATAC2GRN footprinting pipeline (consolidated Snakefile)
+#
+# This file replaces the five near-duplicate Snakefiles that used to live here
+# (Snakefile-v2-hg19PE, -hg19SE, -mm9PE, -mm9SE, Snakefile-v4). Those files are
+# preserved unmodified under legacy/ for exact reproduction of the original
+# paper runs; this file is the actively maintained, config-driven pipeline.
+#
+# All per-run choices (input/output paths, genome build, PE vs SE, peak size,
+# whether to mark duplicates, and the optional association-matrix step) are
+# read from a Snakemake config file -- see config.yaml and Pipes/README.md.
+#
+# Every external tool this file shells out to (bowtie2, samtools, picard,
+# HOMER, bedtools, bedops, rgt-hint) is expected to already be on PATH, as set
+# up by the container built from atac2grn.def. There is no `module load`
+# anywhere in this file: those commands only exist on the original authors'
+# HPC cluster (Lmod) and do not exist inside the container or on a plain
+# workstation.
+#
+# Real, scientifically-meaningful differences found between the five legacy
+# Snakefiles (not just genome/PE-SE substitution) and how they are handled
+# here:
+#   * v4 (chm13) merged multiple sequencing lanes per project and used Picard
+#     (MergeSamFiles -> SortSam -> AddOrReplaceReadGroups -> MarkDuplicates)
+#     before peak calling; v2 (hg19/mm9) only ever handled a single fastq/pair
+#     per project and never deduplicated reads (samtools sort+index only).
+#     Here, multi-lane handling is always on (it is a strict superset of the
+#     single-file case), and `mark_duplicates` in config.yaml toggles between
+#     the two duplicate-handling behaviors.
+#   * v4 used `findPeaks -size 500`; v2 used `-size 50`. `peak_size` in
+#     config.yaml controls this; the shipped default is 50 (see config.yaml
+#     for why).
+#   * v4 used the modern `rgt-hint footprinting --atac-seq [--paired-end]
+#     --organism X bam peaks` CLI; v2 used an older
+#     `rgt-hint --estimate-bias-correction --organism X experiment_matrix.bed`
+#     API. The old API is very unlikely to work with any RGT version
+#     installable today, so this file always uses the modern CLI for every
+#     genome build (see Pipes/README.md for details). This also means the
+#     `experiment_matrix.bed`-writing rule from the legacy files is no longer
+#     needed and has been dropped.
+#   * v4 added optional `perform_fmap`/`perform_pmap` rules intersecting
+#     footprints against a FIMO motif BED and a TSS BED via `bedops bedmap`.
+#     These remain optional here, gated on `fimo_bed`/`tss_bed` being set in
+#     config.yaml (see config.yaml for a caveat about v4's own use of hg19
+#     annotation files against chm13-aligned footprints).
+
+from os.path import basename
+from glob import glob
+
+configfile: "config.yaml"
+
+INPUT_DIR = config["input_dir"]
+OUTPUT_DIR = config["output_dir"]
+MODE = str(config.get("mode", "PE")).upper()
+GENOME_BUILD = config["genome_build"]
+BOWTIE2_INDEX = config["bowtie2_index"]
+PEAK_SIZE = config.get("peak_size", 50)
+PEAK_MIN_DIST = config.get("peak_min_dist", 50)
+MARK_DUPLICATES = bool(config.get("mark_duplicates", True))
+FIMO_BED = config.get("fimo_bed", "")
+TSS_BED = config.get("tss_bed", "")
+THREADS = int(config.get("threads", 8))
+
+if MODE not in ("PE", "SE"):
+    raise ValueError("config['mode'] must be 'PE' or 'SE', got %r" % (MODE,))
+
+PROJECTS = [basename(folder) for folder in glob(INPUT_DIR + '/*')]
+
+
+def _all_targets():
+    targets = expand(OUTPUT_DIR + '/{project}/{project}-footprints/', project=PROJECTS)
+    targets += expand(OUTPUT_DIR + '/{project}/{project}-peaks.bg', project=PROJECTS)
+    if FIMO_BED:
+        targets += expand(OUTPUT_DIR + '/{project}/{project}-bedmap.bed', project=PROJECTS)
+    if TSS_BED:
+        targets += expand(OUTPUT_DIR + '/{project}/{project}-association_matrix_p.bed', project=PROJECTS)
+    return targets
+
+
+rule all:
+    input:
+        _all_targets()
+
+
+# --- Alignment ---------------------------------------------------------------
+# Every FASTQ file found for a project is aligned as its own bowtie2 "lane";
+# lanes are merged in the next rule. A project with a single fastq (or a
+# single R1/R2 pair) behaves exactly like the old single-file v2 pipelines.
+
+if MODE == "PE":
+    rule perform_bowtie:
+        output:
+            touch(OUTPUT_DIR + '/{project}/{project}-step1done.txt')
+        params:
+            proj = INPUT_DIR + '/{project}/',
+            header = OUTPUT_DIR + '/{project}/{project}-bowtie2',
+            index = BOWTIE2_INDEX
+        threads: THREADS
+        shell:
+            r"""
+            mkdir -p {OUTPUT_DIR}/{wildcards.project}
+            count=1
+            shopt -s nullglob
+            for r1 in {params.proj}*_R1*.f*q.gz; do
+                r2="${{r1/_R1/_R2}}"
+                bowtie2 -x {params.index} -p {threads} -q -t --very-sensitive \
+                    -1 "$r1" -2 "$r2" -S {params.header}-$count.sam
+                count=$((count + 1))
+            done
+            if [ "$count" -eq 1 ]; then
+                echo "No *_R1*/*_R2* fastq pairs found under {params.proj}" >&2
+                exit 1
+            fi
+            """
+else:
+    rule perform_bowtie:
+        output:
+            touch(OUTPUT_DIR + '/{project}/{project}-step1done.txt')
+        params:
+            proj = INPUT_DIR + '/{project}/',
+            header = OUTPUT_DIR + '/{project}/{project}-bowtie2',
+            index = BOWTIE2_INDEX
+        threads: THREADS
+        shell:
+            r"""
+            mkdir -p {OUTPUT_DIR}/{wildcards.project}
+            count=1
+            shopt -s nullglob
+            for r1 in {params.proj}*.f*q.gz; do
+                bowtie2 -x {params.index} -p {threads} -q -t --very-sensitive \
+                    -U "$r1" -S {params.header}-$count.sam
+                count=$((count + 1))
+            done
+            if [ "$count" -eq 1 ]; then
+                echo "No fastq files found under {params.proj}" >&2
+                exit 1
+            fi
+            """
+
+
+# --- Merge lanes, sort, (optionally) deduplicate -----------------------------
+# Both branches below produce the same output filenames
+# ({project}-picard.bam[.bai]) so every downstream rule is identical
+# regardless of `mark_duplicates`. NOTE: the "-picard" filename is kept even
+# when mark_duplicates is false and Picard is never invoked -- this matches
+# the (slightly confusing) naming the original v2 Snakefiles already used for
+# their samtools-only output, preserved here for output-path compatibility.
+
+if MARK_DUPLICATES:
+    rule perform_picard_merge_sort:
+        input:
+            OUTPUT_DIR + '/{project}/{project}-step1done.txt'
+        output:
+            temp(OUTPUT_DIR + '/{project}/{project}-view.sam')
+        params:
+            sample = '{project}',
+            header = OUTPUT_DIR + '/{project}/{project}-bowtie2',
+            samfile1 = OUTPUT_DIR + '/{project}/{project}-merged.sam',
+            samfile2 = OUTPUT_DIR + '/{project}/{project}-grouped.sam'
+        shell:
+            r"""
+            arr=({params.header}-*.sam)
+            if [ ${{#arr[@]}} -eq 0 ]; then
+                echo "No bowtie2 .sam files found for {wildcards.project}" >&2
+                exit 1
+            elif [ ${{#arr[@]}} -eq 1 ]; then
+                cp "${{arr[0]}}" {params.samfile1}
+            else
+                cp "${{arr[0]}}" {params.samfile1}
+                for f in "${{arr[@]:1}}"; do
+                    java -Xmx4g -jar $PICARDJARPATH/picard.jar MergeSamFiles \
+                        I={params.samfile1} I="$f" OUTPUT={params.header}-merge_tmp.sam
+                    mv {params.header}-merge_tmp.sam {params.samfile1}
+                done
+            fi
+            java -Xmx4g -jar $PICARDJARPATH/picard.jar SortSam \
+                INPUT={params.samfile1} OUTPUT={params.samfile2} SORT_ORDER=coordinate
+            java -Xmx4g -jar $PICARDJARPATH/picard.jar AddOrReplaceReadGroups \
+                INPUT={params.samfile2} OUTPUT={output} \
+                RGLB=lib1 RGPL=ILLUMINA RGPU=unit1 RGSM={params.sample}
+            rm -f {params.header}-*.sam {params.samfile1} {params.samfile2}
+            """
+
+    rule perform_picard_markduplicates:
+        input:
+            OUTPUT_DIR + '/{project}/{project}-view.sam'
+        output:
+            bamfile = OUTPUT_DIR + '/{project}/{project}-picard.bam',
+            index = OUTPUT_DIR + '/{project}/{project}-picard.bam.bai'
+        params:
+            dedup_sam = OUTPUT_DIR + '/{project}/{project}-dedup.sam',
+            metrics = OUTPUT_DIR + '/{project}/{project}-marked_metrics.txt'
+        shell:
+            r"""
+            java -Xmx4g -jar $PICARDJARPATH/picard.jar MarkDuplicates \
+                INPUT={input} OUTPUT={params.dedup_sam} \
+                METRICS_FILE={params.metrics} REMOVE_DUPLICATES=true
+            java -Xmx4g -jar $PICARDJARPATH/picard.jar SamFormatConverter \
+                INPUT={params.dedup_sam} OUTPUT={output.bamfile}
+            samtools index {output.bamfile}
+            rm -f {params.dedup_sam}
+            """
+else:
+    rule perform_samtools_merge_sort:
+        input:
+            OUTPUT_DIR + '/{project}/{project}-step1done.txt'
+        output:
+            bamfile = OUTPUT_DIR + '/{project}/{project}-picard.bam',
+            index = OUTPUT_DIR + '/{project}/{project}-picard.bam.bai'
+        params:
+            header = OUTPUT_DIR + '/{project}/{project}-bowtie2',
+            merged = OUTPUT_DIR + '/{project}/{project}-merged.bam'
+        threads: THREADS
+        shell:
+            r"""
+            arr=({params.header}-*.sam)
+            if [ ${{#arr[@]}} -eq 0 ]; then
+                echo "No bowtie2 .sam files found for {wildcards.project}" >&2
+                exit 1
+            elif [ ${{#arr[@]}} -eq 1 ]; then
+                samtools view -b -u "${{arr[0]}}" > {params.merged}
+            else
+                tmp_bams=()
+                for f in "${{arr[@]}}"; do
+                    b="${{f%.sam}}.unsorted.bam"
+                    samtools view -b -u "$f" > "$b"
+                    tmp_bams+=("$b")
+                done
+                samtools merge -f {params.merged} "${{tmp_bams[@]}}"
+                rm -f "${{tmp_bams[@]}}"
+            fi
+            samtools sort -@ {threads} {params.merged} -o {output.bamfile}
+            samtools index {output.bamfile}
+            rm -f {params.merged} {params.header}-*.sam
+            """
+
+
+# --- Peak calling (HOMER) -----------------------------------------------------
+
+rule perform_makeTagDirectory:
+    input:
+        OUTPUT_DIR + '/{project}/{project}-picard.bam'
+    output:
+        directory = directory(OUTPUT_DIR + '/{project}/{project}-tagDirectory'),
+        peaks = temp(OUTPUT_DIR + '/{project}/{project}-peaks.bed')
+    params:
+        size = PEAK_SIZE,
+        min_dist = PEAK_MIN_DIST
+    shell:
+        r"""
+        makeTagDirectory {output.directory} {input}
+        findPeaks {output.directory} -region -size {params.size} -minDist {params.min_dist} -o auto -tbp 0
+        pos2bed.pl {output.directory}/peaks.txt > {output.peaks}
+        """
+
+rule perform_grepcutPeaks:
+    input:
+        OUTPUT_DIR + '/{project}/{project}-tagDirectory'
+    output:
+        OUTPUT_DIR + '/{project}/{project}-peaks.bg'
+    params:
+        intermediate = OUTPUT_DIR + '/{project}/{project}-tagDirectory/peaks2.txt'
+    shell:
+        r"""
+        grep -v '#' {input}/peaks.txt > {params.intermediate}
+        cut -f2-4,8 {params.intermediate} > {output}
+        rm -f {params.intermediate}
+        """
+
+rule perform_bedtoolsMergePeaks:
+    input:
+        OUTPUT_DIR + '/{project}/{project}-peaks.bed'
+    output:
+        OUTPUT_DIR + '/{project}/{project}-peaks.merged.bed'
+    params:
+        sorted_bed = OUTPUT_DIR + '/{project}/{project}-peaks.sorted.bed'
+    shell:
+        r"""
+        bedtools sort -i {input} > {params.sorted_bed}
+        bedtools merge -i {params.sorted_bed} > {output}
+        rm -f {params.sorted_bed}
+        """
+
+
+# --- Footprinting (RGT/HINT, modern CLI) --------------------------------------
+# NOTE: rgt-hint only ships built-in genome data for a fixed set of organisms
+# (hg19, hg38, mm9, mm10, ...). If genome_build is anything else (e.g. chm13),
+# you must register it as a custom RGT organism first -- see
+# Pipes/README.md and Pipes/Snakemake/data.config.user.
+
+rule perform_footprinting:
+    input:
+        directory = OUTPUT_DIR + '/{project}/{project}-tagDirectory',
+        bamfile = OUTPUT_DIR + '/{project}/{project}-picard.bam',
+        index = OUTPUT_DIR + '/{project}/{project}-picard.bam.bai',
+        peaks = OUTPUT_DIR + '/{project}/{project}-peaks.merged.bed'
+    output:
+        directory(OUTPUT_DIR + '/{project}/{project}-footprints/')
+    params:
+        organism = GENOME_BUILD,
+        paired_flag = '--paired-end' if MODE == 'PE' else '',
+        prefix = '{project}'
+    shell:
+        r"""
+        mkdir -p {output}
+        rgt-hint footprinting --atac-seq {params.paired_flag} \
+            --output-location {output} --output-prefix {params.prefix} \
+            --organism {params.organism} {input.bamfile} {input.peaks}
+        rm -rf {input.directory}
+        """
+
+
+# --- Optional association-matrix steps (bedops) -------------------------------
+# Only defined at all when the corresponding config key is set, so that
+# `snakemake -n`/`rule all` never reference a bed file path that doesn't
+# exist.
+
+if FIMO_BED:
+    rule perform_fmap:
+        input:
+            OUTPUT_DIR + '/{project}/{project}-footprints/'
+        output:
+            OUTPUT_DIR + '/{project}/{project}-bedmap.bed'
+        params:
+            tmp = OUTPUT_DIR + '/{project}/{project}-HINT.fmap.bed',
+            tmp_sorted = OUTPUT_DIR + '/{project}/{project}-sorted_HINT.fmap.bed',
+            fimo_bed = FIMO_BED
+        shell:
+            r"""
+            cp {input}/*.bed {params.tmp}
+            sort -k1,1 -k2,2n {params.tmp} > {params.tmp_sorted}
+            bedmap --ec --multidelim '&' --skip-unmapped --sweep-all --bp-ovr 3 \
+                --echo --echo-map {params.tmp_sorted} {params.fimo_bed} > {output}
+            rm -f {params.tmp} {params.tmp_sorted}
+            """
+
+if TSS_BED:
+    rule perform_pmap:
+        input:
+            OUTPUT_DIR + '/{project}/{project}-footprints/'
+        output:
+            OUTPUT_DIR + '/{project}/{project}-association_matrix_p.bed'
+        params:
+            tmp = OUTPUT_DIR + '/{project}/{project}-HINT.pmap.bed',
+            tmp_sorted = OUTPUT_DIR + '/{project}/{project}-sorted_HINT.pmap.bed',
+            tss_bed = TSS_BED
+        shell:
+            r"""
+            cp {input}/*.bed {params.tmp}
+            sort -k1,1 -k2,2n {params.tmp} > {params.tmp_sorted}
+            bedmap --ec --multidelim '&' --skip-unmapped --sweep-all \
+                --echo --echo-map {params.tss_bed} {params.tmp_sorted} > {output}
+            rm -f {params.tmp} {params.tmp_sorted}
+            """
